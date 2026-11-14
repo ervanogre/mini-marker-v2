@@ -5,7 +5,7 @@ package.domain = org.ervanalvian
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json,dxf,xlsx
 version = 1.0
-requirements = python3,kivy,flask,werkzeug,jinja2,markupsafe,itsdangerous,click,matplotlib,numpy,pillow,pyjnius,android,ezdxf,openpyxl,typing_extensions,pyparsing,fonttools,cycler,kiwisolver,python-dateutil,et_xmlfile
+requirements = python3,kivy==2.3.0,flask,werkzeug,jinja2,markupsafe,itsdangerous,click,matplotlib,numpy,pillow,pyjnius,android,ezdxf,openpyxl,typing_extensions,pyparsing,fonttools,cycler,kiwisolver,python-dateutil,et_xmlfile
 orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
