@@ -1,0 +1,17 @@
+name: Build APK Mini Marker
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build APK dengan Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        with:
+          buildozer_version: master
+          command: buildozer android debug
+      - name: Unggah Hasil APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiniMarkerStudio-APK
+          path: bin/*.apk
