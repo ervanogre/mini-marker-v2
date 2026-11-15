@@ -2,7 +2,7 @@ import os, io, re, math, base64, textwrap
 from flask import Flask, request, render_template_string, send_file
 
 ezdxf = None
-from ezdxf import path as ezpath
+ezpath = None
 
 app = Flask(__name__)
 import tempfile
