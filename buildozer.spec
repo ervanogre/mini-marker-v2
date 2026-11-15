@@ -8,7 +8,7 @@ version = 1.0
 requirements = python3==3.11.5,hostpython3==3.11.5,kivy==2.3.0,flask,werkzeug,jinja2,markupsafe,itsdangerous,click,pillow,pyjnius,android,openpyxl,typing_extensions,pyparsing,fonttools,et_xmlfile
 orientation = portrait
 fullscreen = 0
-android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
+android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,WAKE_LOCK
 android.api = 33
 android.minapi = 24
 android.ndk = 25b
