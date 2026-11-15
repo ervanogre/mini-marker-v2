@@ -844,7 +844,11 @@ def terapkan_excel_bantu(f_jacci, f_spread):
 def proses():
     f = request.files.get("file_dxf")
     if not f: return render_template_string(HTML, mode="home")
-    f.save(CUR)
+    os.makedirs(UP, exist_ok=True)
+    raw_dxf = f.read()
+    if not raw_dxf: return render_template_string(HTML, mode="home")
+    with open(CUR, "wb") as _out:
+        _out.write(raw_dxf)
     STATE["judul"] = re.sub(r"\.(dxf|json)$", "", os.path.basename(f.filename), flags=re.IGNORECASE)
     STATE["pieces"] = baca_dxf(CUR, STATE["satuan"])
     terapkan_excel_bantu(request.files.get("file_jacci"), request.files.get("file_spread"))
