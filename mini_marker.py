@@ -1,7 +1,7 @@
 import os, io, re, math, base64, textwrap
 from flask import Flask, request, render_template_string, send_file
 try:
-    import ezdxf
+ezdxf = None
 except Exception:
     ezdxf = None
 from ezdxf import path as ezpath
@@ -156,6 +156,8 @@ def baca_dxf_murni(path, satuan="mm"):
     return pieces
 
 def baca_dxf(path, satuan="mm"):
+    if ezdxf is None:
+        return baca_dxf_murni(path, satuan)
     if ezdxf is None:
         return baca_dxf_murni(path, satuan)
     doc = ezdxf.readfile(path)
