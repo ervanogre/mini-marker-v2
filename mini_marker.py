@@ -2,7 +2,7 @@ import os, io, re, math, base64, textwrap
 from flask import Flask, request, render_template_string, send_file
 try:
     import ezdxf
-except ImportError:
+except Exception:
     ezdxf = None
 from ezdxf import path as ezpath
 
