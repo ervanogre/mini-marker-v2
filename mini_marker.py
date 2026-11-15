@@ -1,10 +1,91 @@
 import os, io, re, math, base64, textwrap
 from flask import Flask, request, render_template_string, send_file
 
-ezdxf = None
-ezpath = None
+import math, tempfile
+from PIL import Image, ImageDraw, ImageFont
+
+class _A:
+    def __init__(self, **kw): self.__dict__.update(kw)
+    def __getattr__(self, n): return None
+
+class _E:
+    def __init__(self, t, d, pts=None, txt=""):
+        self._t, self.dxf, self._pts, self.text, self.attribs, self.doc = t, _A(**d), pts or [], txt, [], None
+    def dxftype(self): return self._t
+    def get_points(self, fmt="xy"): return self._pts
+    def __iter__(self): return iter(self._pts)
+
+class _B:
+    def __init__(self, n): self.name, self._e = n, []
+    def __iter__(self): return iter(self._e)
+
+class _D:
+    def __init__(self): self._m, self.blocks = _B("*Model_Space"), {}
+    def modelspace(self): return self._m
+class _PureEzdxf:
+    @staticmethod
+    def readfile(path):
+        raw = [l.strip() for l in open(path, errors="ignore")]
+        pairs = [(raw[i], raw[i+1]) for i in range(0, len(raw)-1, 2)]
+        doc, blk, cur, pacc = _D(), None, None, None
+        def flush():
+            nonlocal cur, pacc
+            if not cur: return
+            t, tgt = cur["t"], (blk._e if blk is not None else doc._m._e)
+            def add_e(obj):
+                obj.doc = doc
+                tgt.append(obj)
+            if t == "LWPOLYLINE" and len(cur["pts"]) >= 2:
+                add_e(_E("LWPOLYLINE", {"layer": cur["l"]}, cur["pts"]))
+            elif t == "POLYLINE":
+                pacc = {"l": cur["l"], "pts": []}
+            elif t == "VERTEX" and pacc and None not in (cur["x"], cur["y"]):
+                pacc["pts"].append((cur["x"], cur["y"]))
+            elif t == "SEQEND" and pacc:
+                if len(pacc["pts"]) >= 2:
+                    add_e(_E("LWPOLYLINE", {"layer": pacc["l"]}, pacc["pts"]))
+                pacc = None
+            elif t == "LINE" and None not in (cur["x"], cur["y"], cur["x2"], cur["y2"]):
+                add_e(_E("LINE", {"layer": cur["l"], "start": _A(x=cur["x"], y=cur["y"]), "end": _A(x=cur["x2"], y=cur["y2"])}))
+            elif t in ("TEXT", "MTEXT") and cur["txt"]:
+                add_e(_E(t, {"layer": cur["l"], "text": cur["txt"], "insert": _A(x=cur["x"] or 0.0, y=cur["y"] or 0.0)}, txt=cur["txt"]))
+            elif t == "INSERT" and cur["n"]:
+                add_e(_E("INSERT", {"layer": cur["l"], "name": cur["n"], "insert": _A(x=cur["x"] or 0.0, y=cur["y"] or 0.0)}))
+            cur = None
+        for c, v in pairs:
+            if c == "0" and v == "SECTION": flush()
+            elif c == "2" and v == "ENTITIES": blk = None
+            elif c == "0" and v == "BLOCK": flush(); cur = {"t":"BLOCK","n":"","l":"0","pts":[],"x":None,"y":None,"x2":None,"y2":None,"txt":""}
+            elif c == "0" and v == "ENDBLK": flush(); blk = None
+            elif c == "0": flush(); cur = {"t":v,"n":"","l":"0","pts":[],"x":None,"y":None,"x2":None,"y2":None,"txt":""}
+            elif cur:
+                t = cur["t"]
+                if c == "8": cur["l"] = v
+                elif t == "BLOCK" and c == "2": cur["n"] = v; blk = _B(v); doc.blocks[v] = blk
+                elif t == "INSERT" and c == "2": cur["n"] = v
+                elif c == "10":
+                    try: cur["x"] = float(v)
+                    except: pass
+                elif c == "20":
+                    try:
+                        yv = float(v); cur["y"] = yv
+                        if t == "LWPOLYLINE" and cur["x"] is not None: cur["pts"].append((cur["x"], yv)); cur["x"] = None
+                    except: pass
+                elif c == "11":
+                    try: cur["x2"] = float(v)
+                    except: pass
+                elif c == "21":
+                    try: cur["y2"] = float(v)
+                    except: pass
+                elif c == "1": cur["txt"] += v
+        flush()
+        return doc
+ezdxf, ezpath = _PureEzdxf(), None
 
 app = Flask(__name__)
+import traceback
+@app.errorhandler(500)
+def err500(e): return f"<pre style=color:red>{traceback.format_exc()}</pre>", 500
 import tempfile
 UP = os.path.join(tempfile.gettempdir(), "minimarker_up")
 os.makedirs(UP, exist_ok=True)
@@ -144,54 +225,7 @@ def deteksi_info_dxf(txts, fallback_name, layers):
             mat = str(next(iter(non_std)))
     return nama[:40], tag[:30], mat, right_txt, qty_num
 
-
-def baca_dxf_murni(path, satuan="mm"):
-    f_cm = 0.1 if satuan == "mm" else 1.0
-    pieces = []
-    with open(path, "r", errors="ignore") as fp:
-        lines = [l.strip() for l in fp]
-    cur_pts = []
-    in_poly = False
-    x_val = None
-    idx = 0
-    i = 0
-    while i < len(lines) - 1:
-        c, v = lines[i], lines[i+1]
-        if c == "0" and v in ("LWPOLYLINE", "POLYLINE"):
-            if len(cur_pts) >= 3:
-                xs = [p[0] for p in cur_pts]; ys = [p[1] for p in cur_pts]
-                w = round((max(xs)-min(xs))*f_cm, 1)
-                h = round((max(ys)-min(ys))*f_cm, 1)
-                idx += 1
-                pieces.append({"nama": f"PIECE_{idx}", "dim": f"{w}*{h}", "qty": 1, "fabric": "1", "tag": "", "right_txt": "", "tag_color": "#111111", "rot": 0, "ol": [cur_pts], "il": []})
-            cur_pts = []; in_poly = True
-        elif in_poly and c == "10":
-            try: x_val = float(v)
-            except: x_val = None
-        elif in_poly and c == "20" and x_val is not None:
-            try:
-                cur_pts.append((x_val, float(v)))
-                x_val = None
-            except: pass
-        elif c == "0" and v in ("ENDSEC", "SEQEND"):
-            if len(cur_pts) >= 3:
-                xs = [p[0] for p in cur_pts]; ys = [p[1] for p in cur_pts]
-                w = round((max(xs)-min(xs))*f_cm, 1)
-                h = round((max(ys)-min(ys))*f_cm, 1)
-                idx += 1
-                pieces.append({"nama": f"PIECE_{idx}", "dim": f"{w}*{h}", "qty": 1, "fabric": "1", "tag": "", "right_txt": "", "tag_color": "#111111", "rot": 0, "ol": [cur_pts], "il": []})
-            cur_pts = []; in_poly = False
-        i += 2
-    for pc in pieces:
-        pc["ol"] = [ringkas_titik(l, 150) for l in pc.get("ol", [])]
-        pc["il"] = [ringkas_titik(l, 90) for l in pc.get("il", [])]
-    return pieces
-
 def baca_dxf(path, satuan="mm"):
-    if ezdxf is None:
-        return baca_dxf_murni(path, satuan)
-    if ezdxf is None:
-        return baca_dxf_murni(path, satuan)
     doc = ezdxf.readfile(path)
     msp = doc.modelspace()
     msp_texts = []
@@ -221,7 +255,7 @@ def baca_dxf(path, satuan="mm"):
                 lays = list({str(e.dxf.layer).upper() for e in blk})
                 if ol or il: raw.append((ins.dxf.name, txts, ol, il, lays))
     if not raw:
-        for blk in doc.blocks:
+        for blk in doc.blocks.values():
             if not blk.name.startswith("*"):
                 ol, il, txts = ekstrak_entitas(blk)
                 lays = list({str(e.dxf.layer).upper() for e in blk})
@@ -283,158 +317,82 @@ def warna_otomatis_tag(tag_str, current_color):
             return col
     return current_color or "#111111"
 
-
-from PIL import Image, ImageDraw, ImageFont
-
-_FONT_CACHE = {}
+_FC = {}
 def get_pil_font(sz, bold=False):
-    key = (round(sz, 1), bold)
-    if key in _FONT_CACHE:
-        return _FONT_CACHE[key]
-    sz_px = max(8, int(sz * (W / 835.0)))
-    candidates = [
-        "/system/fonts/Roboto-Bold.ttf" if bold else "/system/fonts/Roboto-Regular.ttf",
-        "/system/fonts/DroidSans-Bold.ttf" if bold else "/system/fonts/DroidSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    ]
-    for fp in candidates:
+    k = (round(sz, 1), bold)
+    if k in _FC: return _FC[k]
+    for fp in (["/system/fonts/Roboto-Bold.ttf", "/system/fonts/DroidSans-Bold.ttf"] if bold else ["/system/fonts/Roboto-Regular.ttf", "/system/fonts/DroidSans.ttf"]):
         if os.path.exists(fp):
-            try:
-                fnt = ImageFont.truetype(fp, sz_px)
-                _FONT_CACHE[key] = fnt
-                return fnt
+            try: _FC[k] = ImageFont.truetype(fp, max(8, int(sz))); return _FC[k]
             except: pass
     return ImageFont.load_default()
 
 def buat_a4(st, export_mode=False):
-    pieces = st["pieces"]
-    total = len(pieces)
-    max_pages = max(1, min(3, int(st.get("max_pages", 3))))
-    per_page = max(1, math.ceil(total / max_pages)) if total > 0 else 1
-    pages = [pieces[i:i + per_page] for i in range(0, total, per_page)] if total > 0 else [[]]
-    img_list = []
-    W, H = (1754, 1240) if export_mode else (1050, 742)
-    pdf_pages = []
-
-    for page_idx, page_pieces in enumerate(pages):
-        im = Image.new("RGB", (W, H), "white")
-        draw = ImageDraw.Draw(im)
-        page_cnt = {}
-        for p in page_pieces:
-            fb = str(p.get("fabric", "1")).strip() or "1"
-            page_cnt[fb] = page_cnt.get(fb, 0) + 1
-
-        baris_ket = []
-        sorted_keys = sorted(set(st["fabrics"].keys()) | set(page_cnt.keys()), key=lambda x: int(x) if x.isdigit() else 999)
-        for k in sorted_keys:
-            desc = st["fabrics"].get(k, f"FABRIC {k}").upper()
-            jml = page_cnt.get(k, 0)
-            baris_ket.append(f"{k}. {desc} ({jml} KOMPONEN)")
-        for cat in st["catatan"]:
-            if cat.strip():
-                baris_ket.append(f"* {cat.strip().upper()}")
-
-        fs_k = float(st["sz_ket"])
-        ket_h = int((2.6 + max(1, len(baris_ket)) * (fs_k * 0.34 + 0.45)) * (H / 100.0))
-        box_top = int(H * 0.085)
-        box_bot = H - ket_h - 18
-        box_left, box_right = 28, W - 28
-
-        # Header
-        f_jdl = get_pil_font(float(st["sz_judul"]), True)
-        f_kd = get_pil_font(float(st["sz_kode"]), True)
-        jdl_txt = str(st["judul"]).upper()
-        if len(pages) > 1:
-            jdl_txt += f" (HAL. {page_idx + 1}/{len(pages)})"
-        draw.text((W // 2, 22), jdl_txt, fill="#111111", font=f_jdl, anchor="mt")
-        draw.text((box_left, box_top - 8), str(st["kode"]).upper(), fill="#111111", font=f_kd, anchor="lb")
-
-        # Bingkai Utama
-        draw.rectangle([box_left, box_top, box_right, box_bot], outline="#111111", width=3)
-
-        tot = len(page_pieces)
-        if tot > 0:
-            cols = int(st["kolom"]) if str(st["kolom"]).isdigit() else max(4, min(8, math.ceil(tot / 5.0)))
-            rows = math.ceil(tot / cols)
-            col_w = (box_right - box_left) / cols
-            slot_h = (box_bot - box_top) / rows
-
+    pcs, mxp = st["pieces"], max(1, min(3, int(st.get("max_pages", 3))))
+    pp = max(1, math.ceil(len(pcs) / mxp)) if pcs else 1
+    pages = [pcs[i:i+pp] for i in range(0, len(pcs), pp)] if pcs else [[]]
+    imgs, pdfs = [], []
+    W, H = (3508, 2480) if export_mode else (1050, 742)
+    scf = W / 835.0
+    for pi, pps in enumerate(pages):
+        im = Image.new("RGB", (W, H), "white"); dr = ImageDraw.Draw(im)
+        pcnt = {}
+        for p in pps: pcnt[str(p.get("fabric","1")).strip() or "1"] = pcnt.get(str(p.get("fabric","1")).strip() or "1", 0) + 1
+        bket = [f"{k}. {st['fabrics'].get(k, f'FABRIC {k}').upper()} ({pcnt.get(k,0)} KOMPONEN)" for k in sorted(set(st["fabrics"])|set(pcnt), key=lambda x: int(x) if x.isdigit() else 999)]
+        bket += [f"* {c.strip().upper()}" for c in st["catatan"] if c.strip()]
+        fsk = float(st["sz_ket"]) * scf
+        btop, bbot, bl, br = int(H*0.085), H - int((2.6 + max(1,len(bket))*(float(st["sz_ket"])*0.34+0.45))*(H/100.0)) - int(36*(H/2480.0)), int(56*(W/3508.0)), W - int(56*(W/3508.0))
+        dr.text((W//2, int(44*(H/2480.0))), str(st["judul"]).upper() + (f" (HAL. {pi+1}/{len(pages)})" if len(pages)>1 else ""), fill="#111", font=get_pil_font(float(st["sz_judul"])*scf, True), anchor="mt")
+        dr.text((bl, btop-int(16*(H/2480.0))), str(st["kode"]).upper(), fill="#111", font=get_pil_font(float(st["sz_kode"])*scf, True), anchor="lb")
+        dr.rectangle([bl, btop, br, bbot], outline="#111", width=(6 if export_mode else 2))
+        if pps:
+            cols = int(st["kolom"]) if str(st["kolom"]).isdigit() else max(4, min(8, math.ceil(len(pps)/5.0)))
+            rows = math.ceil(len(pps)/cols)
+            cw, sh = (br-bl)/cols, (bbot-btop)/rows
             for c in range(1, cols):
-                gx = int(box_left + c * col_w)
-                for gy in range(box_top + 4, box_bot - 4, 14):
-                    draw.line([(gx, gy), (gx, min(gy + 7, box_bot - 4))], fill="#94a3b8", width=1)
-
-            f_tag = get_pil_font(float(st["sz_tag"]), True)
-            f_p = get_pil_font(float(st["sz_piece"]), True)
-            f_no = get_pil_font(max(7.0, float(st["sz_piece"]) - 0.5), True)
-
-            for idx, p in enumerate(page_pieces):
-                c = idx // rows
-                r = idx % rows
-                sx = box_left + c * col_w
-                sy = box_top + r * slot_h
-                cx = sx + col_w / 2
-
-                tag_str = str(p.get("tag", "")).strip()
-                if tag_str:
-                    draw.text((cx, sy + 6), tag_str, fill=p.get("tag_color", "#111111"), font=f_tag, anchor="mt")
-
-                rol = putar_pts(p["ol"], p.get("rot", 0))
-                ril = putar_pts(p["il"], p.get("rot", 0))
-                pts = [pt for l in (rol + ril) for pt in l]
-                draw_top = sy + (28 if tag_str else 10)
-                draw_bot = sy + slot_h - 46
-                draw_w = max(20, col_w - 22)
-                draw_h = max(20, draw_bot - draw_top)
-
+                gx = int(bl+c*cw)
+                for gy in range(btop+4, bbot-4, int(28*(H/2480.0))): dr.line([(gx,gy),(gx,min(gy+int(14*(H/2480.0)),bbot-4))], fill="#94a3b8", width=(2 if export_mode else 1))
+            ft, fp, fn = get_pil_font(float(st["sz_tag"])*scf, True), get_pil_font(float(st["sz_piece"])*scf, True), get_pil_font(max(7.0,float(st["sz_piece"])-0.5)*scf, True)
+            for idx, p in enumerate(pps):
+                sx, sy, cx = bl+(idx//rows)*cw, btop+(idx%rows)*sh, bl+(idx//rows)*cw+cw/2
+                ts = str(p.get("tag","")).strip()
+                if ts: dr.text((cx, sy+int(12*(H/2480.0))), ts, fill=p.get("tag_color","#111"), font=ft, anchor="mt")
+                rol, ril = putar_pts(p["ol"], p.get("rot",0)), putar_pts(p["il"], p.get("rot",0))
+                pts = [pt for l in (rol+ril) for pt in l]
+                dt, db = sy+int((56 if ts else 20)*(H/2480.0)), sy+sh-int(92*(H/2480.0))
                 if pts:
-                    xs = [x for x, y in pts]; ys = [y for x, y in pts]
+                    xs, ys = [x for x,y in pts], [y for x,y in pts]
                     minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
-                    pw, ph = max(maxx - minx, 0.01), max(maxy - miny, 0.01)
-                    sc = min(draw_w / pw, draw_h / ph)
-                    ox = cx - (pw * sc) / 2
-                    oy = draw_top + (draw_h - ph * sc) / 2
+                    pw, ph = max(maxx-minx, 0.01), max(maxy-miny, 0.01)
+                    sc = min(max(20, cw-int(44*(W/3508.0)))/pw, max(20, db-dt)/ph)
+                    ox, oy = cx-(pw*sc)/2, dt+(max(20, db-dt)-ph*sc)/2
                     for l in ril:
-                        pl = [(ox + (x - minx) * sc, oy + (maxy - y) * sc) for x, y in l]
-                        if len(pl) > 1: draw.line(pl, fill="#1d4ed8", width=2)
+                        pl = [(ox+(x-minx)*sc, oy+(maxy-y)*sc) for x,y in l]
+                        if len(pl)>1: dr.line(pl, fill="#1d4ed8", width=(3 if export_mode else 1))
                     for l in rol:
-                        pl = [(ox + (x - minx) * sc, oy + (maxy - y) * sc) for x, y in l]
-                        if len(pl) > 1: draw.line(pl, fill="#111111", width=2)
-
-                    ku = str(p.get("kode_urut", ""))
+                        pl = [(ox+(x-minx)*sc, oy+(maxy-y)*sc) for x,y in l]
+                        if len(pl)>1: dr.line(pl, fill="#111", width=(4 if export_mode else 2))
+                    ku = str(p.get("kode_urut",""))
                     if ku:
-                        bx, by = int(cx), int(oy + (ph * sc) / 2)
-                        draw.rounded_rectangle([bx - 18, by - 11, bx + 18, by + 11], radius=8, fill="white", outline="#111111", width=2)
-                        draw.text((bx, by), ku, fill="#111111", font=f_no, anchor="mm")
-
-                    rt = str(p.get("right_txt", "")).strip()
-                    if rt:
-                        draw.text((min(sx + col_w - 6, ox + pw * sc + 6), oy + (ph * sc) / 2), rt, fill="#111111", font=f_p, anchor="lm")
-
-                draw.text((cx, sy + slot_h - 38), str(p.get("dim", "")), fill="#111111", font=f_p, anchor="mt")
-                draw.text((cx, sy + slot_h - 21), str(p.get("nama", ""))[:26], fill="#111111", font=f_p, anchor="mt")
-
-        # Kotak Keterangan
-        ky = box_bot + 10
-        f_ket_h = get_pil_font(fs_k + 0.5, True)
-        f_ket = get_pil_font(fs_k, True)
-        draw.text((box_left, ky), "Keterangan :", fill="#111111", font=f_ket_h, anchor="lt")
-        ky += int(fs_k * 2.4)
-        for bk in baris_ket:
-            draw.text((box_left, ky), bk, fill="#111111", font=f_ket, anchor="lt")
-            ky += int(fs_k * 2.3)
-
-        buf = io.BytesIO()
-        im.save(buf, format="PNG")
-        img_list.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
+                        bx, by = int(cx), int(oy+(ph*sc)/2)
+                        bw, bh = int(36*(W/3508.0)), int(22*(H/2480.0))
+                        dr.rounded_rectangle([bx-bw, by-bh, bx+bw, by+bh], radius=int(16*(W/3508.0)), fill="white", outline="#111", width=(3 if export_mode else 2))
+                        dr.text((bx, by), ku, fill="#111", font=fn, anchor="mm")
+                    rt = str(p.get("right_txt","")).strip()
+                    if rt: dr.text((min(sx+cw-6, ox+pw*sc+6), oy+(ph*sc)/2), rt, fill="#111", font=fp, anchor="lm")
+                dr.text((cx, sy+sh-int(76*(H/2480.0))), str(p.get("dim","")), fill="#111", font=fp, anchor="mt")
+                dr.text((cx, sy+sh-int(42*(H/2480.0))), str(p.get("nama",""))[:26], fill="#111", font=fp, anchor="mt")
+        ky = bbot + int(20*(H/2480.0))
+        dr.text((bl, ky), "Keterangan :", fill="#111", font=get_pil_font((float(st["sz_ket"])+0.5)*scf, True), anchor="lt")
+        ky += int(fsk*1.15)
+        for bk in bket: dr.text((bl, ky), bk, fill="#111", font=get_pil_font(fsk, True), anchor="lt"); ky += int(fsk*1.12)
+        buf = io.BytesIO(); im.save(buf, format="PNG"); imgs.append(base64.b64encode(buf.getvalue()).decode())
         if export_mode:
-            pdf_pages.append(im)
-            if page_idx == 0:
-                im.save(os.path.join(UP, "hasil.png"), format="PNG")
+            pdfs.append(im)
+            if pi == 0: im.save(os.path.join(UP, "hasil.png"), format="PNG")
+    if export_mode and pdfs: pdfs.save(os.path.join(UP, "hasil.pdf"), save_all=True, append_images=pdfs[1:])
+    return imgs
 
-    if export_mode and pdf_pages:
-        pdf_pages[0].save(os.path.join(UP, "hasil.pdf"), save_all=True, append_images=pdf_pages[1:])
-    return img_list
 
 HTML = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
