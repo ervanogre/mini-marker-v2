@@ -39,7 +39,7 @@ class MiniMarkerApp(App):
     def start_server(self):
         try:
             import mini_marker
-            mini_marker.app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+            mini_marker.app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
         except Exception:
             err = traceback.format_exc()
             Clock.schedule_once(lambda dt: setattr(self.lbl, 'text', f"Error Server:\n{err[-900:]}"), 0)
