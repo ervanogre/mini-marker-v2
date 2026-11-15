@@ -50,6 +50,17 @@ def ekstrak_entitas(container, tx=0.0, ty=0.0):
                     il.append(shifted)
     return ol, il, txts
 
+
+def ringkas_titik(pts, max_pts=65):
+    n = len(pts)
+    if n <= max_pts:
+        return pts
+    step = max(1, n // max_pts)
+    res = pts[::step]
+    if res[-1] != pts[-1]:
+        res.append(pts[-1])
+    return res
+
 def putar_pts(lines, rot):
     if rot % 360 == 0:
         return lines
@@ -151,6 +162,9 @@ def baca_dxf_murni(path, satuan="mm"):
                 pieces.append({"nama": f"PIECE_{idx}", "dim": f"{w}*{h}", "qty": 1, "fabric": "1", "tag": "", "right_txt": "", "tag_color": "#111111", "rot": 0, "ol": [cur_pts], "il": []})
             cur_pts = []; in_poly = False
         i += 2
+    for pc in pieces:
+        pc["ol"] = [ringkas_titik(l, 70) for l in pc.get("ol", [])]
+        pc["il"] = [ringkas_titik(l, 45) for l in pc.get("il", [])]
     return pieces
 
 def baca_dxf(path, satuan="mm"):
@@ -224,6 +238,9 @@ def baca_dxf(path, satuan="mm"):
         w, h, dim_str = hitung_dim(ol, il, satuan)
         pieces.append({"nama": nama, "qty": qty_num, "dim": dim_str, "urut": idx, "fabric": no_fab, "tag": tag, "tag_color": "#111111", "right_txt": right_txt, "rot": 0, "w": w, "h": h, "ol": ol, "il": il})
     STATE["fabrics"] = fabrics_found if fabrics_found else {"1": "MAIN FABRIC"}
+    for pc in pieces:
+        pc["ol"] = [ringkas_titik(l, 70) for l in pc.get("ol", [])]
+        pc["il"] = [ringkas_titik(l, 45) for l in pc.get("il", [])]
     return pieces
 
 
