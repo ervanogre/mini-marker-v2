@@ -249,8 +249,12 @@ def warna_otomatis_tag(tag_str, current_color):
 
 from PIL import Image, ImageDraw, ImageFont
 
+_FONT_CACHE = {}
 def get_pil_font(sz, bold=False):
-    sz_px = max(10, int(sz * 2.1))
+    key = (round(sz, 1), bold)
+    if key in _FONT_CACHE:
+        return _FONT_CACHE[key]
+    sz_px = max(8, int(sz * (W / 835.0)))
     candidates = [
         "/system/fonts/Roboto-Bold.ttf" if bold else "/system/fonts/Roboto-Regular.ttf",
         "/system/fonts/DroidSans-Bold.ttf" if bold else "/system/fonts/DroidSans.ttf",
@@ -258,7 +262,10 @@ def get_pil_font(sz, bold=False):
     ]
     for fp in candidates:
         if os.path.exists(fp):
-            try: return ImageFont.truetype(fp, sz_px)
+            try:
+                fnt = ImageFont.truetype(fp, sz_px)
+                _FONT_CACHE[key] = fnt
+                return fnt
             except: pass
     return ImageFont.load_default()
 
@@ -269,7 +276,7 @@ def buat_a4(st, export_mode=False):
     per_page = max(1, math.ceil(total / max_pages)) if total > 0 else 1
     pages = [pieces[i:i + per_page] for i in range(0, total, per_page)] if total > 0 else [[]]
     img_list = []
-    W, H = 1754, 1240  # A4 Landscape 150 DPI
+    W, H = (1754, 1240) if export_mode else (1050, 742)
     pdf_pages = []
 
     for page_idx, page_pieces in enumerate(pages):
