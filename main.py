@@ -6,37 +6,34 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.button import Button
 from jnius import autoclass
-from android.runnable import run_on_ui_thread
 
-WebView = autoclass('android.webkit.WebView')
-WebViewClient = autoclass('android.webkit.WebViewClient')
-LayoutParams = autoclass('android.view.ViewGroup$LayoutParams')
 Intent = autoclass('android.content.Intent')
 Uri = autoclass('android.net.Uri')
 py_activity = autoclass('org.kivy.android.PythonActivity').mActivity
 
 class MiniMarkerApp(App):
     def build(self):
-        root = BoxLayout(orientation='vertical', padding=24, spacing=14)
+        root = BoxLayout(orientation='vertical', padding=28, spacing=18)
         self.lbl = Label(
-            text="Memuat Mini Marker Studio...\nDesign by ERVAN ALVIAN",
+            text="MINI MARKER STUDIO\nDesign by ERVAN ALVIAN\n\nMenyiapkan server lokal...",
             halign="center", valign="middle",
-            text_size=(Window.width - 48, None),
-            font_size="15sp"
+            text_size=(Window.width - 56, None),
+            font_size="16sp"
         )
-        btn_chrome = Button(
-            text="Buka di Browser Chrome (Full Fitur)",
+        btn_open = Button(
+            text="BUKA MINI MARKER STUDIO",
             size_hint=(1, None),
-            height="52dp",
+            height="58dp",
             background_color=(0.01, 0.52, 0.78, 1),
-            font_size="15sp"
+            font_size="16sp",
+            bold=True
         )
-        btn_chrome.bind(on_release=self.open_in_browser)
+        btn_open.bind(on_release=self.open_in_browser)
         root.add_widget(self.lbl)
-        root.add_widget(btn_chrome)
+        root.add_widget(btn_open)
 
         threading.Thread(target=self.start_server, daemon=True).start()
-        Clock.schedule_once(self.attach_webview, 2.5)
+        Clock.schedule_once(self.auto_launch, 2.0)
         return root
 
     def start_server(self):
@@ -47,27 +44,16 @@ class MiniMarkerApp(App):
             err = traceback.format_exc()
             Clock.schedule_once(lambda dt: setattr(self.lbl, 'text', f"Error Server:\n{err[-900:]}"), 0)
 
+    def auto_launch(self, dt):
+        self.lbl.text = "MINI MARKER STUDIO AKTIF!\nDesign by ERVAN ALVIAN\n\nJangan tutup aplikasi ini dari background saat digunakan.\nKetuk tombol di bawah jika halaman belum terbuka."
+        self.open_in_browser()
+
     def open_in_browser(self, *args):
         try:
             intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:5000"))
             py_activity.startActivity(intent)
         except Exception as e:
-            self.lbl.text = f"Gagal membuka browser:\n{e}"
-
-    @run_on_ui_thread
-    def attach_webview(self, dt):
-        try:
-            webview = WebView(py_activity)
-            settings = webview.getSettings()
-            settings.setJavaScriptEnabled(True)
-            settings.setDomStorageEnabled(True)
-            settings.setAllowFileAccess(True)
-            webview.setWebViewClient(WebViewClient())
-            params = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-            py_activity.addContentView(webview, params)
-            webview.loadUrl("http://127.0.0.1:5000")
-        except Exception:
-            self.lbl.text = "Server Mini Marker Studio Aktif!\nKetuk tombol di bawah untuk membuka."
+            self.lbl.text = f"Silakan buka Chrome dan akses:\nhttp://127.0.0.1:5000\n({e})"
 
 if __name__ == "__main__":
     MiniMarkerApp().run()
