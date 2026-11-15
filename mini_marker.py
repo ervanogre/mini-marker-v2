@@ -51,15 +51,35 @@ def ekstrak_entitas(container, tx=0.0, ty=0.0):
     return ol, il, txts
 
 
-def ringkas_titik(pts, max_pts=65):
+def _rdp(pts, eps):
+    if len(pts) < 3:
+        return pts
+    x1, y1 = pts[0]
+    x2, y2 = pts[-1]
+    dx, dy = x2 - x1, y2 - y1
+    d_len = math.hypot(dx, dy)
+    max_d, idx = -1.0, 0
+    for i in range(1, len(pts) - 1):
+        px, py = pts[i]
+        if d_len == 0:
+            d = math.hypot(px - x1, py - y1)
+        else:
+            d = abs(dy * px - dx * py + x2 * y1 - y2 * x1) / d_len
+        if d > max_d:
+            max_d, idx = d, i
+    if max_d > eps:
+        return _rdp(pts[:idx + 1], eps)[:-1] + _rdp(pts[idx:], eps)
+    return [pts[0], pts[-1]]
+
+def ringkas_titik(pts, max_pts=120):
     n = len(pts)
     if n <= max_pts:
         return pts
-    step = max(1, n // max_pts)
-    res = pts[::step]
-    if res[-1] != pts[-1]:
-        res.append(pts[-1])
-    return res
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+    eps = max(0.05, diag * 0.0012)
+    res = _rdp(pts, eps)
+    return res if len(res) >= 3 else pts
 
 def putar_pts(lines, rot):
     if rot % 360 == 0:
@@ -163,8 +183,8 @@ def baca_dxf_murni(path, satuan="mm"):
             cur_pts = []; in_poly = False
         i += 2
     for pc in pieces:
-        pc["ol"] = [ringkas_titik(l, 70) for l in pc.get("ol", [])]
-        pc["il"] = [ringkas_titik(l, 45) for l in pc.get("il", [])]
+        pc["ol"] = [ringkas_titik(l, 150) for l in pc.get("ol", [])]
+        pc["il"] = [ringkas_titik(l, 90) for l in pc.get("il", [])]
     return pieces
 
 def baca_dxf(path, satuan="mm"):
@@ -239,8 +259,8 @@ def baca_dxf(path, satuan="mm"):
         pieces.append({"nama": nama, "qty": qty_num, "dim": dim_str, "urut": idx, "fabric": no_fab, "tag": tag, "tag_color": "#111111", "right_txt": right_txt, "rot": 0, "w": w, "h": h, "ol": ol, "il": il})
     STATE["fabrics"] = fabrics_found if fabrics_found else {"1": "MAIN FABRIC"}
     for pc in pieces:
-        pc["ol"] = [ringkas_titik(l, 70) for l in pc.get("ol", [])]
-        pc["il"] = [ringkas_titik(l, 45) for l in pc.get("il", [])]
+        pc["ol"] = [ringkas_titik(l, 150) for l in pc.get("ol", [])]
+        pc["il"] = [ringkas_titik(l, 90) for l in pc.get("il", [])]
     return pieces
 
 
