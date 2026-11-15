@@ -139,7 +139,7 @@ def baca_dxf_murni(path, satuan="mm"):
         c, v = lines[i], lines[i+1]
         if c == "0" and v in ("LWPOLYLINE", "POLYLINE"):
             if len(cur_pts) >= 3:
-                xs = [p for p in cur_pts]; ys = [p for p in cur_pts]
+                xs = [p[0] for p in cur_pts]; ys = [p[1] for p in cur_pts]
                 w = round((max(xs)-min(xs))*f_cm, 1)
                 h = round((max(ys)-min(ys))*f_cm, 1)
                 idx += 1
@@ -155,7 +155,7 @@ def baca_dxf_murni(path, satuan="mm"):
             except: pass
         elif c == "0" and v in ("ENDSEC", "SEQEND"):
             if len(cur_pts) >= 3:
-                xs = [p for p in cur_pts]; ys = [p for p in cur_pts]
+                xs = [p[0] for p in cur_pts]; ys = [p[1] for p in cur_pts]
                 w = round((max(xs)-min(xs))*f_cm, 1)
                 h = round((max(ys)-min(ys))*f_cm, 1)
                 idx += 1
