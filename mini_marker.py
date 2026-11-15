@@ -1,9 +1,7 @@
 import os, io, re, math, base64, textwrap
 from flask import Flask, request, render_template_string, send_file
-try:
+    pass
 ezdxf = None
-except Exception:
-    ezdxf = None
 from ezdxf import path as ezpath
 
 app = Flask(__name__)
