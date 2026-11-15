@@ -2,14 +2,10 @@ import os, io, re, math, base64, textwrap
 from flask import Flask, request, render_template_string, send_file
 import ezdxf
 from ezdxf import path as ezpath
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from matplotlib.collections import LineCollection
 
 app = Flask(__name__)
-UP = "uploads"
+import tempfile
+UP = os.path.join(tempfile.gettempdir(), "minimarker_up")
 os.makedirs(UP, exist_ok=True)
 CUR = os.path.join(UP, "cur.dxf")
 
@@ -205,186 +201,150 @@ def warna_otomatis_tag(tag_str, current_color):
             return col
     return current_color or "#111111"
 
+
+from PIL import Image, ImageDraw, ImageFont
+
+def get_pil_font(sz, bold=False):
+    sz_px = max(10, int(sz * 2.1))
+    candidates = [
+        "/system/fonts/Roboto-Bold.ttf" if bold else "/system/fonts/Roboto-Regular.ttf",
+        "/system/fonts/DroidSans-Bold.ttf" if bold else "/system/fonts/DroidSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    ]
+    for fp in candidates:
+        if os.path.exists(fp):
+            try: return ImageFont.truetype(fp, sz_px)
+            except: pass
+    return ImageFont.load_default()
+
 def buat_a4(st, export_mode=False):
-    from matplotlib.backends.backend_pdf import PdfPages
-    # Kelompokkan dan urutkan pattern berdasarkan nomor fabric (1, 2, 3, dst)
-    pieces = sorted(
-        st["pieces"],
-        key=lambda p: (
-            int(str(p.get("fabric", "1")).strip()) if str(p.get("fabric", "1")).strip().isdigit() else 999,
-            str(p.get("nama", ""))
-        )
-    )
-    ff = st["font_family"]
-    grup_cnt = {}
-    for p in pieces:
-        g = str(p.get('fabric', '1')).strip() or '1'
-        grup_cnt[g] = grup_cnt.get(g, 0) + 1
-        p['kode_urut'] = f"{g}.{grup_cnt[g]}"
-
-    total_all = len(pieces)
-
-    # Tentukan jumlah halaman (maksimal 3 lembar A4)
-    mp = str(st.get("max_pages", 3))
-    if mp in ("1", "2", "3"):
-        total_pages = min(int(mp), max(1, total_all))
-    else:
-        total_pages = min(3, max(1, math.ceil(total_all / 35)))
-
-    per_page = max(1, math.ceil(total_all / total_pages))
-    pdf_path = os.path.join(UP, "hasil.pdf")
+    pieces = st["pieces"]
+    total = len(pieces)
+    max_pages = max(1, min(3, int(st.get("max_pages", 3))))
+    per_page = max(1, math.ceil(total / max_pages)) if total > 0 else 1
+    pages = [pieces[i:i + per_page] for i in range(0, total, per_page)] if total > 0 else [[]]
     img_list = []
+    W, H = 1754, 1240  # A4 Landscape 150 DPI
+    pdf_pages = []
 
-    pdf = PdfPages(pdf_path) if export_mode else None
-    if True:
-        for page_idx in range(total_pages):
-            page_pieces = pieces[page_idx * per_page : (page_idx + 1) * per_page]
-            if not page_pieces and page_idx > 0:
-                continue
+    for page_idx, page_pieces in enumerate(pages):
+        im = Image.new("RGB", (W, H), "white")
+        draw = ImageDraw.Draw(im)
+        page_cnt = {}
+        for p in page_pieces:
+            fb = str(p.get("fabric", "1")).strip() or "1"
+            page_cnt[fb] = page_cnt.get(fb, 0) + 1
 
-            # Hitung jumlah komponen per fabric KHUSUS pada lembar ini
-            page_cnt = {}
-            for p in page_pieces:
-                g = str(p.get('fabric', '1')).strip() or '1'
-                page_cnt[g] = page_cnt.get(g, 0) + 1
+        baris_ket = []
+        sorted_keys = sorted(set(st["fabrics"].keys()) | set(page_cnt.keys()), key=lambda x: int(x) if x.isdigit() else 999)
+        for k in sorted_keys:
+            desc = st["fabrics"].get(k, f"FABRIC {k}").upper()
+            jml = page_cnt.get(k, 0)
+            baris_ket.append(f"{k}. {desc} ({jml} KOMPONEN)")
+        for cat in st["catatan"]:
+            if cat.strip():
+                baris_ket.append(f"* {cat.strip().upper()}")
 
-            # Susun Keterangan HANYA sesuai nomor fabric yang tampil pada lembar ini
-            sorted_keys = sorted(set(st["fabrics"].keys()) | set(page_cnt.keys()), key=lambda x: int(x) if x.isdigit() else 999)
-            baris_ket = []
-            for g_id in sorted_keys:
-                nama_fab = st["fabrics"].get(g_id, f"FABRIC {g_id}").upper()
-                jml_komp = page_cnt.get(g_id, 0)
-                baris_ket.append(f"{g_id}. {nama_fab} ({jml_komp} KOMPONEN)")
+        fs_k = float(st["sz_ket"])
+        ket_h = int((2.6 + max(1, len(baris_ket)) * (fs_k * 0.34 + 0.45)) * (H / 100.0))
+        box_top = int(H * 0.085)
+        box_bot = H - ket_h - 18
+        box_left, box_right = 28, W - 28
 
-            # Tambahkan catatan tambahan di lembar terakhir
-            if page_idx == total_pages - 1:
-                for cat in st["catatan"]:
-                    if cat.strip():
-                        baris_ket.append(f"* {cat.strip().upper()}")
+        # Header
+        f_jdl = get_pil_font(float(st["sz_judul"]), True)
+        f_kd = get_pil_font(float(st["sz_kode"]), True)
+        jdl_txt = str(st["judul"]).upper()
+        if len(pages) > 1:
+            jdl_txt += f" (HAL. {page_idx + 1}/{len(pages)})"
+        draw.text((W // 2, 22), jdl_txt, fill="#111111", font=f_jdl, anchor="mt")
+        draw.text((box_left, box_top - 8), str(st["kode"]).upper(), fill="#111111", font=f_kd, anchor="lb")
 
-            fs_k = float(st["sz_ket"])
-            # Hitung tinggi area keterangan secara fleksibel mengikuti jumlah baris dan ukuran font keterangan
-            ket_area_h = 2.6 + max(1, len(baris_ket)) * (fs_k * 0.34 + 0.45)
+        # Bingkai Utama
+        draw.rectangle([box_left, box_top, box_right, box_bot], outline="#111111", width=3)
 
-            fig = plt.figure(figsize=(11.69, 8.27), dpi=115 if not export_mode else 180)
-            fig.patch.set_facecolor('white')
-            ax = fig.add_axes([0.015, 0.015, 0.97, 0.97])
-            ax.set_xlim(0, 100); ax.set_ylim(0, 100); ax.axis('off')
+        tot = len(page_pieces)
+        if tot > 0:
+            cols = int(st["kolom"]) if str(st["kolom"]).isdigit() else max(4, min(8, math.ceil(tot / 5.0)))
+            rows = math.ceil(tot / cols)
+            col_w = (box_right - box_left) / cols
+            slot_h = (box_bot - box_top) / rows
 
-            # Batas atas kotak menyesuaikan ukuran font Judul/Style
-            box_top = min(93.5, max(82.0, 96.5 - (float(st["sz_judul"]) * 0.22)))
-            box_bot = min(55.0, max(5.5, ket_area_h + 1.0))
+            for c in range(1, cols):
+                gx = int(box_left + c * col_w)
+                for gy in range(box_top + 4, box_bot - 4, 14):
+                    draw.line([(gx, gy), (gx, min(gy + 7, box_bot - 4))], fill="#94a3b8", width=1)
 
-            if str(st.get("kode", "")).strip():
-                ax.text(0.6, 93.2, str(st["kode"]).upper(), ha='left', va='center', fontsize=st["sz_kode"], fontweight='bold', family=ff, color='#111')
+            f_tag = get_pil_font(float(st["sz_tag"]), True)
+            f_p = get_pil_font(float(st["sz_piece"]), True)
+            f_no = get_pil_font(max(7.0, float(st["sz_piece"]) - 0.5), True)
 
-            ax.text(50, 96.2, str(st["judul"]).upper(), ha='center', va='center', fontsize=st["sz_judul"], fontweight='bold', family=ff, color='#111')
-            if total_pages > 1:
-                ax.text(99.4, 93.2, f"LEMBAR {page_idx + 1}/{total_pages}", ha='right', va='center', fontsize=max(2.0, st["sz_kode"] - 1.5), fontweight='bold', family=ff, color='#333')
+            for idx, p in enumerate(page_pieces):
+                c = idx // rows
+                r = idx % rows
+                sx = box_left + c * col_w
+                sy = box_top + r * slot_h
+                cx = sx + col_w / 2
 
-            # Kotak Border Utama (Berhenti tepat di atas area Keterangan di setiap lembar)
-            ax.add_patch(patches.Rectangle((0.5, box_bot), 99.0, box_top - box_bot, lw=1.1, ec='#111', fc='none'))
+                tag_str = str(p.get("tag", "")).strip()
+                if tag_str:
+                    draw.text((cx, sy + 6), tag_str, fill=p.get("tag_color", "#111111"), font=f_tag, anchor="mt")
 
-            # Keterangan di bagian bawah SETIAP lembar sesuai fabric di lembar tersebut
-            y_ket_title = box_bot - 1.2
-            ax.text(0.8, y_ket_title, "KETERANGAN :", fontsize=fs_k + 0.4, fontweight='bold', family=ff, color='#111', va='top')
-            ax.plot([0.8, 0.8 + (fs_k * 1.35)], [y_ket_title - 1.25, y_ket_title - 1.25], color='#111', lw=0.8)
-            if baris_ket:
-                ax.text(0.8, y_ket_title - 1.7, "\n".join(baris_ket), fontsize=fs_k, fontweight='bold', family=ff, va='top', linespacing=1.4, color='#111')
+                rol = putar_pts(p["ol"], p.get("rot", 0))
+                ril = putar_pts(p["il"], p.get("rot", 0))
+                pts = [pt for l in (rol + ril) for pt in l]
+                draw_top = sy + (28 if tag_str else 10)
+                draw_bot = sy + slot_h - 46
+                draw_w = max(20, col_w - 22)
+                draw_h = max(20, draw_bot - draw_top)
 
-            tot = len(page_pieces)
-            if tot > 0:
-                avail_box_h = max(25.0, box_top - box_bot)
-                if str(st["kolom"]).isdigit():
-                    cols = int(st["kolom"])
-                else:
-                    # Semakin pendek kotak (karena keterangan banyak), kolom otomatis bertambah agar isi tidak gepeng
-                    faktor_tinggi = 82.0 / avail_box_h
-                    cols = max(4, min(8, math.ceil((tot / 5.0) * math.sqrt(faktor_tinggi))))
-                col_w = 97.6 / cols
-                per_col = math.ceil(tot / cols)
-                rotated_data, max_dim = [], 1.0
-                for p in page_pieces:
-                    rol, ril = putar_pts(p['ol'], p.get('rot', 0)), putar_pts(p['il'], p.get('rot', 0))
-                    pts = [pt for l in (rol + ril) for pt in l]
-                    if pts:
-                        xs, ys = [x for x, y in pts], [y for x, y in pts]
-                        pw, ph = max(max(xs) - min(xs), 0.01), max(max(ys) - min(ys), 0.01)
-                        max_dim = max(max_dim, pw, ph)
-                    else:
-                        pw, ph = 10.0, 10.0
-                    rotated_data.append((rol, ril, pw, ph))
+                if pts:
+                    xs = [x for x, y in pts]; ys = [y for x, y in pts]
+                    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+                    pw, ph = max(maxx - minx, 0.01), max(maxy - miny, 0.01)
+                    sc = min(draw_w / pw, draw_h / ph)
+                    ox = cx - (pw * sc) / 2
+                    oy = draw_top + (draw_h - ph * sc) / 2
+                    for l in ril:
+                        pl = [(ox + (x - minx) * sc, oy + (maxy - y) * sc) for x, y in l]
+                        if len(pl) > 1: draw.line(pl, fill="#1d4ed8", width=2)
+                    for l in rol:
+                        pl = [(ox + (x - minx) * sc, oy + (maxy - y) * sc) for x, y in l]
+                        if len(pl) > 1: draw.line(pl, fill="#111111", width=2)
 
-                base_scale = (col_w * 0.78) / max_dim
-                for c in range(cols):
-                    start_i, end_i = c * per_col, min(tot, (c + 1) * per_col)
-                    if start_i >= tot:
-                        break
-                    n_items = end_i - start_i
-                    x_left = 1.2 + c * col_w
-                    x_center = x_left + col_w / 2
-                    y_top_start, y_bottom_limit = box_top - 0.9, box_bot + 0.9
-                    slot_h = (y_top_start - y_bottom_limit) / n_items
+                    ku = str(p.get("kode_urut", ""))
+                    if ku:
+                        bx, by = int(cx), int(oy + (ph * sc) / 2)
+                        draw.rounded_rectangle([bx - 18, by - 11, bx + 18, by + 11], radius=8, fill="white", outline="#111111", width=2)
+                        draw.text((bx, by), ku, fill="#111111", font=f_no, anchor="mm")
 
-                    for r, idx in enumerate(range(start_i, end_i)):
-                        p = page_pieces[idx]
-                        rol, ril, pw, ph = rotated_data[idx]
-                        y_top, y_bot = y_top_start - r * slot_h, y_top_start - (r + 1) * slot_h
+                    rt = str(p.get("right_txt", "")).strip()
+                    if rt:
+                        draw.text((min(sx + col_w - 6, ox + pw * sc + 6), oy + (ph * sc) / 2), rt, fill="#111111", font=f_p, anchor="lm")
 
-                        tag_txt = str(p.get('tag', '')).strip()
-                        tag_lines = tag_txt.count('\n') + 1 if tag_txt else 0
-                        top_space = (tag_lines * (st["sz_tag"] * 0.25 + 0.55)) if tag_txt else 0.35
+                draw.text((cx, sy + slot_h - 38), str(p.get("dim", "")), fill="#111111", font=f_p, anchor="mt")
+                draw.text((cx, sy + slot_h - 21), str(p.get("nama", ""))[:26], fill="#111111", font=f_p, anchor="mt")
 
-                        nama_wrapped = "\n".join(textwrap.wrap(str(p['nama']), width=22))
-                        nama_lines = nama_wrapped.count('\n') + 1
-                        fs_p = st["sz_piece"]
-                        bot_space = (fs_p * 0.25) + (nama_lines * (fs_p * 0.24 + 0.35)) + 0.65
+        # Kotak Keterangan
+        ky = box_bot + 10
+        f_ket_h = get_pil_font(fs_k + 0.5, True)
+        f_ket = get_pil_font(fs_k, True)
+        draw.text((box_left, ky), "Keterangan :", fill="#111111", font=f_ket_h, anchor="lt")
+        ky += int(fs_k * 2.4)
+        for bk in baris_ket:
+            draw.text((box_left, ky), bk, fill="#111111", font=f_ket, anchor="lt")
+            ky += int(fs_k * 2.3)
 
-                        draw_h = max(slot_h - top_space - bot_space - 0.6, 1.8)
-                        r_txt = str(p.get('right_txt', '')).strip()
-                        draw_w = col_w * (0.64 if r_txt else 0.80)
-                        all_pts = [pt for l in (rol + ril) for pt in l]
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        img_list.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
+        if export_mode:
+            pdf_pages.append(im)
+            if page_idx == 0:
+                im.save(os.path.join(UP, "hasil.png"), format="PNG")
 
-                        if all_pts:
-                            xs, ys = [x for x, y in all_pts], [y for x, y in all_pts]
-                            minx, miny = min(xs), min(ys)
-                            # Skala fleksibel: menyesuaikan tinggi slot (akibat perubahan Keterangan) & lebar kolom
-                            tinggi_rasio = max(0.35, min(1.35, avail_box_h / 80.0))
-                            sc = min(base_scale * tinggi_rasio, draw_w / pw, draw_h / ph)
-                            if pw * sc < draw_w * 0.35 and ph * sc < draw_h * 0.45:
-                                sc = min(draw_w * 0.65 / pw, draw_h * 0.78 / ph)
-                            w_drawn, h_drawn = pw * sc, ph * sc
-                            y_mid_slot = y_bot + bot_space + (slot_h - top_space - bot_space) / 2
-                            x_shift = (col_w * 0.08) if r_txt else 0.0
-                            ox, oy = (x_center - x_shift) - w_drawn / 2, y_mid_slot - h_drawn / 2
-                            top_edge, bot_edge = oy + h_drawn, oy
-
-                            if tag_txt:
-                                ax.text(x_center, top_edge + 0.45, tag_txt.upper(), ha='center', va='bottom', fontsize=st["sz_tag"], fontweight='bold', family=ff, color=p.get('tag_color', '#111111'), linespacing=1.15)
-                            if r_txt:
-                                ax.text(ox + w_drawn + 0.6, y_mid_slot, r_txt, ha='left', va='center', fontsize=st["sz_tag"], fontweight='bold', family=ff, color=p.get('tag_color', '#111111'), clip_on=False)
-                            kode_lbl = p.get('kode_urut', '1.1')
-                            ax.text(max(x_left + 1.4, ox - 1.5), top_edge - 0.35, kode_lbl, ha='center', va='center', fontsize=max(1.5, fs_p - 0.5), fontweight='bold', family=ff, bbox=dict(boxstyle='round,pad=0.22,rounding_size=0.8', fc='white', ec='#111', lw=0.75))
-
-                            for l in ril:
-                                ax.plot([ox + (x - minx) * sc for x, y in l], [oy + (y - miny) * sc for x, y in l], color='#1d4ed8', lw=0.55, ls='--')
-                            for l in rol:
-                                ax.plot([ox + (x - minx) * sc for x, y in l], [oy + (y - miny) * sc for x, y in l], color='#111111', lw=0.85)
-
-                            ax.text(x_center, bot_edge - 0.35, p['dim'], ha='center', va='top', fontsize=max(1.5, fs_p - 0.3), family=ff, color='#111')
-                            ax.text(x_center, bot_edge - 0.35 - (fs_p * 0.25 + 0.25), nama_wrapped, ha='center', va='top', fontsize=fs_p, family=ff, color='#111', linespacing=1.1)
-
-            if export_mode:
-                pdf.savefig(fig, dpi=300)
-                if page_idx == 0:
-                    fig.savefig(os.path.join(UP, "hasil.png"), format='png', dpi=220)
-            buf = io.BytesIO()
-            fig.savefig(buf, format='png', dpi=115)
-            plt.close(fig)
-            buf.seek(0)
-            img_list.append(base64.b64encode(buf.getvalue()).decode('utf-8'))
-    if pdf:
-        pdf.close()
+    if export_mode and pdf_pages:
+        pdf_pages[0].save(os.path.join(UP, "hasil.pdf"), save_all=True, append_images=pdf_pages[1:])
     return img_list
 
 HTML = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -904,7 +864,6 @@ def update():
 
 @app.route("/dl/checklist")
 def dl_checklist():
-    from matplotlib.backends.backend_pdf import PdfPages
     by_fab = sorted(
         STATE["pieces"],
         key=lambda p: (

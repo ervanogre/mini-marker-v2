@@ -1,10 +1,9 @@
-import threading, time
+import os, sys, threading, traceback
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.uix.label import Label
 from jnius import autoclass
 from android.runnable import run_on_ui_thread
-import mini_marker
 
 WebView = autoclass('android.webkit.WebView')
 WebViewClient = autoclass('android.webkit.WebViewClient')
@@ -12,23 +11,32 @@ activity = autoclass('org.kivy.android.PythonActivity').mActivity
 
 class MiniMarkerApp(App):
     def build(self):
+        self.lbl = Label(text="Memuat Mini Marker Studio...\nDesign by ERVAN ALVIAN", halign="center")
         threading.Thread(target=self.start_server, daemon=True).start()
         Clock.schedule_once(self.open_webview, 2.5)
-        return Label(text="Memuat Mini Marker Studio...\nDesign by ERVAN ALVIAN", halign="center")
+        return self.lbl
 
     def start_server(self):
-        mini_marker.app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+        try:
+            import mini_marker
+            mini_marker.app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+        except Exception as e:
+            err = traceback.format_exc()
+            Clock.schedule_once(lambda dt: setattr(self.lbl, 'text', f"Error Server:\n{err[:400]}"), 0)
 
     @run_on_ui_thread
     def open_webview(self, dt):
-        webview = WebView(activity)
-        settings = webview.getSettings()
-        settings.setJavaScriptEnabled(True)
-        settings.setDomStorageEnabled(True)
-        settings.setAllowFileAccess(True)
-        webview.setWebViewClient(WebViewClient())
-        activity.setContentView(webview)
-        webview.loadUrl("http://127.0.0.1:5000")
+        try:
+            webview = WebView(activity)
+            settings = webview.getSettings()
+            settings.setJavaScriptEnabled(True)
+            settings.setDomStorageEnabled(True)
+            settings.setAllowFileAccess(True)
+            webview.setWebViewClient(WebViewClient())
+            activity.setContentView(webview)
+            webview.loadUrl("http://127.0.0.1:5000")
+        except Exception as e:
+            self.lbl.text = f"Error UI:\n{e}"
 
 if __name__ == "__main__":
     MiniMarkerApp().run()
